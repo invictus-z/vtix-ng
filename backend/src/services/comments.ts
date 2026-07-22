@@ -9,6 +9,7 @@ import {
 } from "../db";
 import { hasPermission, PERMISSIONS } from "../utils/permissions";
 import type { User } from "../utils/session";
+import { createMessage } from "./messages";
 
 export const MAX_COMMENT_LENGTH = 500;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -252,10 +253,11 @@ export async function createComment(options: {
 export async function toggleCommentLike(options: {
   commentId: number;
   userId: number;
+  likerName: string;
 }): Promise<{ liked: boolean; likeCount: number } | null> {
-  const { commentId, userId } = options;
+  const { commentId, userId, likerName } = options;
 
-  return db.transaction(async (tx: typeof db) => {
+  const result = await db.transaction(async (tx: typeof db) => {
     const [commentRow] = await tx
       .select({ id: problemComments.id, likeCount: problemComments.likeCount })
       .from(problemComments)
@@ -302,6 +304,38 @@ export async function toggleCommentLike(options: {
       .where(eq(problemComments.id, commentId));
     return { liked: true, likeCount: Number(commentRow.likeCount) + 1 };
   });
+
+  // Notify the comment author when someone new likes their comment
+  // (message type 2 = comment-like; review notifications use type 1).
+  // Skip self-likes and never notify on unliking.
+  if (result && result.liked) {
+    try {
+      const [authorRow] = await db
+        .select({
+          userId: problemComments.userId,
+          userName: problemComments.userName,
+          floor: problemComments.floor,
+        })
+        .from(problemComments)
+        .where(eq(problemComments.id, commentId))
+        .limit(1);
+      if (authorRow && Number(authorRow.userId) !== userId) {
+        await createMessage({
+          senderId: userId,
+          senderName: likerName,
+          receiverId: Number(authorRow.userId),
+          receiverName: authorRow.userName,
+          content: `${likerName} 赞了你的评论（${authorRow.floor}楼）`,
+          type: 2,
+          link: null,
+        });
+      }
+    } catch (error) {
+      console.warn("[comments] failed to notify comment author of like", error);
+    }
+  }
+
+  return result;
 }
 
 export async function reportComment(options: {

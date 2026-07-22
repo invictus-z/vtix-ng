@@ -85,6 +85,7 @@ export const registerCommentRoutes = (app: Elysia) =>
       const result = await toggleCommentLike({
         commentId,
         userId: Number(user.id),
+        likerName: user.name,
       });
       if (!result) {
         set.status = 404;
