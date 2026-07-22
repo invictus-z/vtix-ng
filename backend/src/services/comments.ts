@@ -504,6 +504,18 @@ export async function deleteComment(options: {
   return { ok: true, allowed: true };
 }
 
+// A moderator dismissed a report: drop the report row but keep the comment
+// (and its likes / other reports on it). Idempotent — deleting a row that is
+// already gone is a no-op.
+export async function dismissCommentReport(options: {
+  reportId: number;
+}): Promise<{ ok: boolean }> {
+  await db
+    .delete(problemCommentReports)
+    .where(eq(problemCommentReports.id, options.reportId));
+  return { ok: true };
+}
+
 export async function loadReportedCommentsPage(options: {
   page: number;
   pageSize: number;

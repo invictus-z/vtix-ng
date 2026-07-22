@@ -126,7 +126,7 @@ watch(
           <div class="nav-links">
             <RouterLink :to="{ name: 'admin-comments' }" :class="['nav-link', { active: activeName === 'admin-comments' }]">
               <span class="nav-icon pi pi-comments" aria-hidden="true" />
-              <span>被举报评论</span>
+              <span>举报处理</span>
             </RouterLink>
           </div>
         </div>

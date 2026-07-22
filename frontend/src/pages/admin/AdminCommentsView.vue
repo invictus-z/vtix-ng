@@ -39,6 +39,7 @@ const pageSize = ref(10)
 const total = ref(0)
 const pageSizeOptions = [10, 20, 30]
 const deletingId = ref<number | null>(null)
+const dismissingId = ref<number | null>(null)
 
 const canManage = computed(
   () =>
@@ -138,6 +139,52 @@ async function doDelete(item: ReportedComment) {
   }
 }
 
+function handleDismiss(item: ReportedComment) {
+  confirm.require({
+    message: '确定忽略这条举报吗？仅移除该条举报记录，评论予以保留。',
+    header: '忽略举报',
+    icon: 'pi pi-info-circle',
+    accept: () => doDismiss(item)
+  })
+}
+
+async function doDismiss(item: ReportedComment) {
+  dismissingId.value = item.reportId
+  try {
+    const response = await fetch(
+      `${apiBase}/api/admin/comments/reports/${item.reportId}`,
+      {
+        method: 'DELETE',
+        credentials: 'include'
+      }
+    )
+    const data = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string }
+      | null
+    if (!response.ok) {
+      toast.add({
+        severity: 'error',
+        summary: '操作失败',
+        detail: data?.error || `操作失败: ${response.status}`,
+        life: 3000
+      })
+      return
+    }
+    toast.add({ severity: 'success', summary: '已忽略', life: 2000 })
+    if (items.value.length <= 1 && page.value > 1) page.value -= 1
+    await loadItems()
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: '操作失败',
+      detail: error instanceof Error ? error.message : '网络错误',
+      life: 3000
+    })
+  } finally {
+    dismissingId.value = null
+  }
+}
+
 onMounted(() => {
   if (canManage.value) void loadItems()
 })
@@ -148,8 +195,10 @@ onMounted(() => {
     <header class="page-head">
       <div>
         <div class="eyebrow">评论管理</div>
-        <h1>被举报评论</h1>
-        <p>处理用户举报的评论。删除评论会同时移除其全部点赞与举报记录。</p>
+        <h1>举报处理</h1>
+        <p>
+          处理用户举报的评论。删除评论会同时移除其全部点赞与举报记录；忽略仅移除该条举报记录，评论予以保留。
+        </p>
       </div>
     </header>
 
@@ -185,6 +234,13 @@ onMounted(() => {
               </div>
             </div>
             <div class="report-actions">
+              <Button
+                label="忽略"
+                severity="secondary"
+                size="small"
+                :loading="dismissingId === item.reportId"
+                @click="handleDismiss(item)"
+              />
               <Button
                 label="删除评论"
                 severity="danger"
@@ -332,6 +388,10 @@ onMounted(() => {
 
 .report-actions {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
 }
 
 .report-paginator {

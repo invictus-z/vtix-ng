@@ -3,6 +3,7 @@ import {
   checkCommentRateLimit,
   createComment,
   deleteComment,
+  dismissCommentReport,
   loadCommentsPage,
   loadReportedCommentsPage,
   reportComment,
@@ -153,4 +154,22 @@ export const registerCommentRoutes = (app: Elysia) =>
       const { items, total } = await loadReportedCommentsPage({ page, pageSize });
       set.headers["x-total-count"] = String(total);
       return items;
+    })
+    .delete("/api/admin/comments/reports/:reportId", async ({ params, request, set }) => {
+      const user = getSessionUser(request);
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+      if (!hasPermission(user.permissions, PERMISSIONS.MANAGE_COMMENTS)) {
+        set.status = 403;
+        return { error: "Forbidden" };
+      }
+      const reportId = Number(params.reportId);
+      if (!Number.isFinite(reportId) || reportId <= 0) {
+        set.status = 400;
+        return { error: "Invalid report id." };
+      }
+      await dismissCommentReport({ reportId });
+      return { ok: true };
     });
