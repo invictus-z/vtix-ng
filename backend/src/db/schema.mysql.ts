@@ -6,6 +6,7 @@ import {
   mysqlTable,
   primaryKey,
   text,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
 
@@ -181,3 +182,57 @@ export const brawlRecords = mysqlTable("brawl_records", {
   winnerName: varchar("winner_name", { length: 255 }),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
 });
+
+export const problemComments = mysqlTable("problem_comments", {
+  id: int("id").autoincrement().primaryKey(),
+  problemId: int("problem_id")
+    .notNull()
+    .references(() => problems.id, { onDelete: "cascade" }),
+  userId: int("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  userName: varchar("user_name", { length: 255 }).notNull(),
+  content: text("content").notNull(),
+  floor: int("floor").notNull(),
+  likeCount: int("like_count").notNull().default(0),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
+
+export const problemCommentLikes = mysqlTable(
+  "problem_comment_likes",
+  {
+    commentId: int("comment_id")
+      .notNull()
+      .references(() => problemComments.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.commentId, table.userId] }),
+  })
+);
+
+export const problemCommentReports = mysqlTable(
+  "problem_comment_reports",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    commentId: int("comment_id")
+      .notNull()
+      .references(() => problemComments.id, { onDelete: "cascade" }),
+    reporterId: int("reporter_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    reason: text("reason"),
+    status: varchar("status", { length: 32 }).notNull().default("open"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    unq: uniqueIndex("problem_comment_reports_unique").on(
+      table.commentId,
+      table.reporterId
+    ),
+  })
+);

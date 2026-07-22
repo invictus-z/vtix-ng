@@ -523,6 +523,50 @@ async function ensureSqliteTables() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS problem_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      problem_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      user_name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      floor INTEGER NOT NULL,
+      like_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_problem_comments_problem_floor
+      ON problem_comments(problem_id, floor);
+    CREATE INDEX IF NOT EXISTS idx_problem_comments_problem_id
+      ON problem_comments(problem_id, id);
+  `);
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS problem_comment_likes (
+      comment_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (comment_id, user_id),
+      FOREIGN KEY (comment_id) REFERENCES problem_comments(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS problem_comment_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      comment_id INTEGER NOT NULL,
+      reporter_id INTEGER NOT NULL,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at INTEGER NOT NULL,
+      UNIQUE (comment_id, reporter_id),
+      FOREIGN KEY (comment_id) REFERENCES problem_comments(id) ON DELETE CASCADE,
+      FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_problem_comment_reports_status
+      ON problem_comment_reports(status, created_at);
+  `);
   ensureSqliteProblemSetTimestampColumns(client);
   ensureSqliteProblemSetPendingColumn(client);
   ensureSqliteProblemSetStatsColumns(client);
@@ -693,6 +737,53 @@ async function ensureMysqlTables() {
         REFERENCES problem_sets(id) ON DELETE CASCADE,
       CONSTRAINT fk_psr_user_id FOREIGN KEY (user_id)
         REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  await execMysql(`
+    CREATE TABLE IF NOT EXISTS problem_comments (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      problem_id INT NOT NULL,
+      user_id INT NOT NULL,
+      user_name VARCHAR(255) NOT NULL,
+      content TEXT NOT NULL,
+      floor INT NOT NULL,
+      like_count INT NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      CONSTRAINT fk_pc_problem_id FOREIGN KEY (problem_id)
+        REFERENCES problems(id) ON DELETE CASCADE,
+      CONSTRAINT fk_pc_user_id FOREIGN KEY (user_id)
+        REFERENCES users(id) ON DELETE CASCADE,
+      INDEX idx_problem_comments_problem_floor (problem_id, floor),
+      INDEX idx_problem_comments_problem_id (problem_id, id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  await execMysql(`
+    CREATE TABLE IF NOT EXISTS problem_comment_likes (
+      comment_id INT NOT NULL,
+      user_id INT NOT NULL,
+      created_at BIGINT NOT NULL,
+      PRIMARY KEY (comment_id, user_id),
+      CONSTRAINT fk_pcl_comment_id FOREIGN KEY (comment_id)
+        REFERENCES problem_comments(id) ON DELETE CASCADE,
+      CONSTRAINT fk_pcl_user_id FOREIGN KEY (user_id)
+        REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  await execMysql(`
+    CREATE TABLE IF NOT EXISTS problem_comment_reports (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      comment_id INT NOT NULL,
+      reporter_id INT NOT NULL,
+      reason TEXT,
+      status VARCHAR(32) NOT NULL DEFAULT 'open',
+      created_at BIGINT NOT NULL,
+      UNIQUE KEY uq_problem_comment_reports (comment_id, reporter_id),
+      CONSTRAINT fk_pcr_comment_id FOREIGN KEY (comment_id)
+        REFERENCES problem_comments(id) ON DELETE CASCADE,
+      CONSTRAINT fk_pcr_reporter_id FOREIGN KEY (reporter_id)
+        REFERENCES users(id) ON DELETE CASCADE,
+      INDEX idx_problem_comment_reports_status (status, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 }

@@ -1,0 +1,334 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import Button from 'primevue/button'
+import Card from 'primevue/card'
+import Paginator from 'primevue/paginator'
+import type { PageState } from 'primevue/paginator'
+import Tag from 'primevue/tag'
+import { useToast } from 'primevue/usetoast'
+import { useConfirm } from 'primevue/useconfirm'
+import { useUserStore } from '../../stores/user'
+
+const MANAGE_COMMENTS_PERMISSION = 1 << 13
+const apiBase = import.meta.env.VITE_API_BASE ?? 'http://localhost:3000'
+const toast = useToast()
+const confirm = useConfirm()
+const userStore = useUserStore()
+
+type ReportedComment = {
+  reportId: number
+  commentId: number
+  problemId: number
+  commentUserName: string
+  commentContent: string
+  floor: number
+  likeCount: number
+  reporterId: number
+  reason: string | null
+  status: string
+  createdAt: number
+}
+
+const items = ref<ReportedComment[]>([])
+const loading = ref(false)
+const loadError = ref('')
+const page = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
+const pageSizeOptions = [10, 20, 30]
+const deletingId = ref<number | null>(null)
+
+const canManage = computed(
+  () =>
+    !!userStore.user &&
+    (userStore.user.permissions & MANAGE_COMMENTS_PERMISSION) ===
+      MANAGE_COMMENTS_PERMISSION
+)
+
+function formatRelativeTime(timestamp: number) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '--'
+  const diff = Date.now() - timestamp
+  if (diff < 60 * 1000) return '刚刚'
+  if (diff < 60 * 60 * 1000) return `${Math.floor(diff / (60 * 1000))} 分钟前`
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / (60 * 60 * 1000))} 小时前`
+  return `${Math.floor(diff / (24 * 60 * 60 * 1000))} 天前`
+}
+
+async function loadItems() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    const response = await fetch(
+      `${apiBase}/api/admin/comments/reported?page=${page.value}&pageSize=${pageSize.value}`,
+      { credentials: 'include' }
+    )
+    if (!response.ok) throw new Error(`加载失败: ${response.status}`)
+    const data = (await response.json()) as ReportedComment[]
+    items.value = Array.isArray(data) ? data : []
+    const totalHeader = response.headers.get('x-total-count')
+    const totalNum = totalHeader ? Number(totalHeader) : NaN
+    total.value = Number.isFinite(totalNum)
+      ? Math.max(0, totalNum)
+      : (page.value - 1) * pageSize.value + items.value.length
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : '加载失败'
+    items.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+function handlePage(event: PageState) {
+  if (typeof event.rows === 'number') pageSize.value = event.rows
+  page.value = (event.page ?? 0) + 1
+  void loadItems()
+}
+
+function handleDelete(item: ReportedComment) {
+  confirm.require({
+    message: '确定要删除这条被举报的评论吗？',
+    header: '删除评论',
+    icon: 'pi pi-exclamation-triangle',
+    acceptClass: 'p-button-danger',
+    accept: () => doDelete(item)
+  })
+}
+
+async function doDelete(item: ReportedComment) {
+  deletingId.value = item.commentId
+  try {
+    const response = await fetch(`${apiBase}/api/comments/${item.commentId}`, {
+      method: 'DELETE',
+      credentials: 'include'
+    })
+    const data = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string }
+      | null
+    if (!response.ok) {
+      toast.add({
+        severity: 'error',
+        summary: '删除失败',
+        detail: data?.error || `删除失败: ${response.status}`,
+        life: 3000
+      })
+      return
+    }
+    toast.add({ severity: 'success', summary: '已删除', life: 2000 })
+    if (items.value.length <= 1 && page.value > 1) page.value -= 1
+    await loadItems()
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: '删除失败',
+      detail: error instanceof Error ? error.message : '网络错误',
+      life: 3000
+    })
+  } finally {
+    deletingId.value = null
+  }
+}
+
+onMounted(() => {
+  if (canManage.value) void loadItems()
+})
+</script>
+
+<template>
+  <section class="page">
+    <header class="page-head">
+      <div>
+        <div class="eyebrow">评论管理</div>
+        <h1>被举报评论</h1>
+        <p>处理用户举报的评论。删除评论会同时移除其全部点赞与举报记录。</p>
+      </div>
+    </header>
+
+    <div v-if="!canManage" class="status">
+      <div class="status-title">无权限</div>
+      <div class="status-detail">你没有管理评论的权限。</div>
+    </div>
+
+    <div v-else-if="loadError" class="status">
+      <div class="status-title">加载失败</div>
+      <div class="status-detail">{{ loadError }}</div>
+    </div>
+
+    <Card v-else class="report-card">
+      <template #content>
+        <div v-if="loading" class="state-text">加载中…</div>
+        <div v-else-if="!items.length" class="state-text">暂无被举报的评论</div>
+        <ul v-else class="report-list">
+          <li v-for="item in items" :key="item.reportId" class="report-item">
+            <div class="report-main">
+              <div class="report-meta">
+                <Tag severity="secondary">{{ item.floor }}楼</Tag>
+                <span class="report-author">{{ item.commentUserName || '匿名' }}</span>
+                <span class="report-dot">·</span>
+                <span class="report-sub">题号 {{ item.problemId }}</span>
+                <span class="report-dot">·</span>
+                <time class="report-sub">{{ formatRelativeTime(item.createdAt) }}</time>
+              </div>
+              <p class="report-content">{{ item.commentContent }}</p>
+              <div class="report-reason">
+                <span class="reason-label">举报理由：</span>
+                <span class="reason-text">{{ item.reason || '未填写' }}</span>
+              </div>
+            </div>
+            <div class="report-actions">
+              <Button
+                label="删除评论"
+                severity="danger"
+                size="small"
+                :loading="deletingId === item.commentId"
+                @click="handleDelete(item)"
+              />
+            </div>
+          </li>
+        </ul>
+
+        <Paginator
+          v-if="total > 0"
+          class="report-paginator"
+          :first="(page - 1) * pageSize"
+          :rows="pageSize"
+          :total-records="total"
+          :rows-per-page-options="pageSizeOptions"
+          template="PrevPageLink PageLinks NextPageLink RowsPerPageSelect"
+          @page="handlePage"
+        />
+      </template>
+    </Card>
+  </section>
+</template>
+
+<style scoped>
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.page-head h1 {
+  margin: 4px 0 6px;
+  font-size: 30px;
+  color: var(--vtix-text-strong);
+}
+
+.page-head p {
+  margin: 0;
+  color: var(--vtix-text-muted);
+  font-size: 13px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vtix-text-subtle);
+  margin-top: 4px;
+}
+
+.status {
+  border: 1px solid var(--vtix-danger-border);
+  background: var(--vtix-danger-bg);
+  color: var(--vtix-danger-text);
+  padding: 14px 16px;
+  border-radius: 14px;
+}
+
+.status-title {
+  font-weight: 700;
+}
+
+.status-detail {
+  font-size: 13px;
+}
+
+.state-text {
+  text-align: center;
+  color: var(--vtix-text-subtle);
+  font-size: 13px;
+  padding: 18px;
+}
+
+.report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.report-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 0;
+}
+
+.report-item + .report-item {
+  border-top: 1px solid var(--vtix-border);
+}
+
+.report-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.report-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.report-author {
+  font-weight: 700;
+  color: var(--vtix-text-strong);
+  font-size: 13px;
+}
+
+.report-sub {
+  color: var(--vtix-text-muted);
+}
+
+.report-dot {
+  color: var(--vtix-text-subtle);
+}
+
+.report-content {
+  margin: 0;
+  color: var(--vtix-text);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-reason {
+  font-size: 12px;
+  color: var(--vtix-text-muted);
+}
+
+.reason-label {
+  color: var(--vtix-danger-text);
+  font-weight: 700;
+}
+
+.report-actions {
+  flex-shrink: 0;
+}
+
+.report-paginator {
+  border-top: 1px solid var(--vtix-border);
+  border-radius: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+</style>

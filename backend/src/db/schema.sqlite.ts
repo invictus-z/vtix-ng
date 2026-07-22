@@ -1,4 +1,4 @@
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 
 type TestConfigItem = {
   type: number;
@@ -181,3 +181,57 @@ export const brawlRecords = sqliteTable("brawl_records", {
   winnerName: text("winner_name"),
   createdAt: integer("created_at").notNull(),
 });
+
+export const problemComments = sqliteTable("problem_comments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  problemId: integer("problem_id")
+    .notNull()
+    .references(() => problems.id, { onDelete: "cascade" }),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  userName: text("user_name").notNull(),
+  content: text("content").notNull(),
+  floor: integer("floor").notNull(),
+  likeCount: integer("like_count").notNull().default(0),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const problemCommentLikes = sqliteTable(
+  "problem_comment_likes",
+  {
+    commentId: integer("comment_id")
+      .notNull()
+      .references(() => problemComments.id, { onDelete: "cascade" }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.commentId, table.userId] }),
+  })
+);
+
+export const problemCommentReports = sqliteTable(
+  "problem_comment_reports",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    commentId: integer("comment_id")
+      .notNull()
+      .references(() => problemComments.id, { onDelete: "cascade" }),
+    reporterId: integer("reporter_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    reason: text("reason"),
+    status: text("status").notNull().default("open"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => ({
+    unq: unique("problem_comment_reports_unique").on(
+      table.commentId,
+      table.reporterId
+    ),
+  })
+);
