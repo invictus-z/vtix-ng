@@ -19,6 +19,8 @@ type ReportedComment = {
   reportId: number
   commentId: number
   problemId: number
+  setTitle: string | null
+  questionNumber: number | null
   commentUserName: string
   commentContent: string
   floor: number
@@ -52,6 +54,13 @@ function formatRelativeTime(timestamp: number) {
   if (diff < 60 * 60 * 1000) return `${Math.floor(diff / (60 * 1000))} 分钟前`
   if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / (60 * 60 * 1000))} 小时前`
   return `${Math.floor(diff / (24 * 60 * 60 * 1000))} 天前`
+}
+
+function problemLabel(item: ReportedComment) {
+  const title = item.setTitle?.trim()
+  if (title && item.questionNumber) return `《${title}》第${item.questionNumber}题`
+  if (title) return `《${title}》`
+  return `题目 #${item.problemId}`
 }
 
 async function loadItems() {
@@ -165,7 +174,7 @@ onMounted(() => {
                 <Tag severity="secondary">{{ item.floor }}楼</Tag>
                 <span class="report-author">{{ item.commentUserName || '匿名' }}</span>
                 <span class="report-dot">·</span>
-                <span class="report-sub">题号 {{ item.problemId }}</span>
+                <span class="report-sub">{{ problemLabel(item) }}</span>
                 <span class="report-dot">·</span>
                 <time class="report-sub">{{ formatRelativeTime(item.createdAt) }}</time>
               </div>

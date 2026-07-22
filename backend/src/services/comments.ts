@@ -34,6 +34,8 @@ export type ReportedCommentPayload = {
   reportId: number;
   commentId: number;
   problemId: number;
+  setTitle: string | null;
+  questionNumber: number | null;
   commentUserName: string;
   commentContent: string;
   floor: number;
@@ -468,11 +470,21 @@ export async function loadReportedCommentsPage(options: {
       reason: problemCommentReports.reason,
       status: problemCommentReports.status,
       createdAt: problemCommentReports.createdAt,
+      setTitle: problemSets.title,
+      orderIndex: problemSetProblems.orderIndex,
     })
     .from(problemCommentReports)
     .innerJoin(
       problemComments,
       eq(problemCommentReports.commentId, problemComments.id)
+    )
+    .leftJoin(
+      problemSetProblems,
+      eq(problemComments.problemId, problemSetProblems.problemId)
+    )
+    .leftJoin(
+      problemSets,
+      eq(problemSetProblems.problemSetId, problemSets.id)
     )
     .orderBy(desc(problemCommentReports.createdAt))
     .limit(pageSize)
@@ -488,7 +500,29 @@ export async function loadReportedCommentsPage(options: {
     reason: string | null;
     status: string;
     createdAt: number;
+    setTitle: string | null;
+    orderIndex: number | null;
   }>;
 
-  return { items: rows, total };
+  return {
+    items: rows.map((row) => ({
+      reportId: row.reportId,
+      commentId: row.commentId,
+      problemId: row.problemId,
+      setTitle: row.setTitle ?? null,
+      questionNumber:
+        Number.isFinite(Number(row.orderIndex)) && Number(row.orderIndex) >= 0
+          ? Number(row.orderIndex) + 1
+          : null,
+      commentUserName: row.commentUserName,
+      commentContent: row.commentContent,
+      floor: row.floor,
+      likeCount: row.likeCount,
+      reporterId: row.reporterId,
+      reason: row.reason,
+      status: row.status,
+      createdAt: row.createdAt,
+    })),
+    total,
+  };
 }
