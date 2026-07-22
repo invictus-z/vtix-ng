@@ -541,21 +541,32 @@ export async function loadReportedCommentsPage(options: {
       reason: problemCommentReports.reason,
       status: problemCommentReports.status,
       createdAt: problemCommentReports.createdAt,
-      setTitle: problemSets.title,
-      orderIndex: problemSetProblems.orderIndex,
+      // Pick ONE set per problem (the most recently updated) via correlated
+      // subqueries, instead of LEFT JOINing problem_set_problems. A problem can
+      // belong to several sets (its PK is (problem_set_id, problem_id)), so a
+      // plain join would fan each report out into N duplicate rows. This mirrors
+      // resolveProblemContext's pick rule.
+      setTitle: sql<string | null>`(
+        select ps.title
+        from problem_set_problems psp
+        inner join problem_sets ps on ps.id = psp.problem_set_id
+        where psp.problem_id = ${problemComments.problemId}
+        order by ps.updated_at desc
+        limit 1
+      )`,
+      orderIndex: sql<number | null>`(
+        select psp.order_index
+        from problem_set_problems psp
+        inner join problem_sets ps on ps.id = psp.problem_set_id
+        where psp.problem_id = ${problemComments.problemId}
+        order by ps.updated_at desc
+        limit 1
+      )`,
     })
     .from(problemCommentReports)
     .innerJoin(
       problemComments,
       eq(problemCommentReports.commentId, problemComments.id)
-    )
-    .leftJoin(
-      problemSetProblems,
-      eq(problemComments.problemId, problemSetProblems.problemId)
-    )
-    .leftJoin(
-      problemSets,
-      eq(problemSetProblems.problemSetId, problemSets.id)
     )
     .orderBy(desc(problemCommentReports.createdAt))
     .limit(pageSize)
