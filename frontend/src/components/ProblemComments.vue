@@ -339,7 +339,7 @@ watch(sort, () => {
         :auto-resize="true"
         rows="2"
         :maxlength="MAX_COMMENT_LENGTH"
-        placeholder="说说你对这道题的看法、巧妙记法或吐槽…（登录后可发表）"
+        placeholder="说说你对这道题的看法、巧妙记法或吐槽…"
         class="composer-input"
       />
       <div class="composer-foot">

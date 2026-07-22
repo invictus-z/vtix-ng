@@ -5,6 +5,8 @@ import {
   problemCommentLikes,
   problemCommentReports,
   problemComments,
+  problemSetProblems,
+  problemSets,
   problems,
 } from "../db";
 import { hasPermission, PERMISSIONS } from "../utils/permissions";
@@ -99,6 +101,38 @@ function extractInsertedId(result: unknown): number | null {
   if (typeof result === "number") return result;
   if (result && typeof (result as any).id === "number") return (result as any).id;
   return null;
+}
+
+const COMMENT_SNIPPET_MAX = 40;
+
+function buildCommentSnippet(content: string): string {
+  const text = (content ?? "").replace(/\s+/g, " ").trim();
+  return text.length > COMMENT_SNIPPET_MAX
+    ? `${text.slice(0, COMMENT_SNIPPET_MAX)}…`
+    : text;
+}
+
+// Each problem row belongs to exactly one problem set; resolve its title and
+// 1-based question number within that set for the notification text.
+async function resolveProblemContext(
+  problemId: number
+): Promise<{ title: string; questionNumber: number } | null> {
+  if (!Number.isFinite(problemId) || problemId <= 0) return null;
+  const [row] = await db
+    .select({
+      title: problemSets.title,
+      orderIndex: problemSetProblems.orderIndex,
+    })
+    .from(problemSetProblems)
+    .innerJoin(problemSets, eq(problemSetProblems.problemSetId, problemSets.id))
+    .where(eq(problemSetProblems.problemId, problemId))
+    .orderBy(desc(problemSets.updatedAt))
+    .limit(1);
+  if (!row) return null;
+  return {
+    title: String(row.title ?? ""),
+    questionNumber: Number(row.orderIndex ?? 0) + 1,
+  };
 }
 
 export async function loadCommentsPage(options: {
@@ -314,18 +348,24 @@ export async function toggleCommentLike(options: {
         .select({
           userId: problemComments.userId,
           userName: problemComments.userName,
-          floor: problemComments.floor,
+          problemId: problemComments.problemId,
+          content: problemComments.content,
         })
         .from(problemComments)
         .where(eq(problemComments.id, commentId))
         .limit(1);
       if (authorRow && Number(authorRow.userId) !== userId) {
+        const snippet = buildCommentSnippet(authorRow.content);
+        const context = await resolveProblemContext(Number(authorRow.problemId));
+        const content = context
+          ? `${likerName} 赞了你在《${context.title}》第${context.questionNumber}题的评论：${snippet}`
+          : `${likerName} 赞了你的评论：${snippet}`;
         await createMessage({
           senderId: userId,
           senderName: likerName,
           receiverId: Number(authorRow.userId),
           receiverName: authorRow.userName,
-          content: `${likerName} 赞了你的评论（${authorRow.floor}楼）`,
+          content,
           type: 2,
           link: null,
         });
