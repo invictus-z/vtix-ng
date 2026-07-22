@@ -8,6 +8,8 @@ import {
   problemSetProblems,
   problemSets,
   problems,
+  userGroups,
+  users,
 } from "../db";
 import { hasPermission, PERMISSIONS } from "../utils/permissions";
 import type { User } from "../utils/session";
@@ -380,16 +382,45 @@ export async function toggleCommentLike(options: {
   return result;
 }
 
+// Notify every user who can moderate comments (MANAGE_COMMENTS). Message type 3
+// = report notification. Skips the reporter when they are themselves a moderator.
+async function notifyCommentModerators(options: {
+  senderId: number;
+  senderName: string;
+  content: string;
+}) {
+  const moderators = (await db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .innerJoin(userGroups, eq(users.groupId, userGroups.id))
+    .where(
+      sql`(${userGroups.permissions} & ${PERMISSIONS.MANAGE_COMMENTS}) = ${PERMISSIONS.MANAGE_COMMENTS}`
+    )) as Array<{ id: number; name: string }>;
+  for (const mod of moderators) {
+    if (Number(mod.id) === options.senderId) continue;
+    await createMessage({
+      senderId: options.senderId,
+      senderName: options.senderName,
+      receiverId: Number(mod.id),
+      receiverName: mod.name,
+      content: options.content,
+      type: 3,
+      link: "/admin/comments",
+    });
+  }
+}
+
 export async function reportComment(options: {
   commentId: number;
   reporterId: number;
+  reporterName: string;
   reason?: string;
 }): Promise<{ ok: boolean; alreadyReported?: boolean } | null> {
-  const { commentId, reporterId } = options;
+  const { commentId, reporterId, reporterName } = options;
   const reason = options.reason?.trim() || null;
 
   const [commentRow] = await db
-    .select({ id: problemComments.id })
+    .select({ id: problemComments.id, problemId: problemComments.problemId })
     .from(problemComments)
     .where(eq(problemComments.id, commentId))
     .limit(1);
@@ -409,6 +440,14 @@ export async function reportComment(options: {
     return { ok: true, alreadyReported: true };
   }
 
+  // Only notify moderators on a comment's first report, so repeat reports on the
+  // same comment don't spam their inbox.
+  const [countRow] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(problemCommentReports)
+    .where(eq(problemCommentReports.commentId, commentId));
+  const firstReport = Number(countRow?.count ?? 0) === 0;
+
   await db.insert(problemCommentReports).values({
     commentId,
     reporterId,
@@ -416,6 +455,26 @@ export async function reportComment(options: {
     status: "open",
     createdAt: Date.now(),
   });
+
+  if (firstReport) {
+    try {
+      const context = await resolveProblemContext(Number(commentRow.problemId));
+      const location = context
+        ? `《${context.title}》第${context.questionNumber}题`
+        : "一道题目";
+      const content = reason
+        ? `${reporterName} 举报了${location}的评论：${reason}`
+        : `${reporterName} 举报了${location}的评论`;
+      await notifyCommentModerators({
+        senderId: reporterId,
+        senderName: reporterName,
+        content,
+      });
+    } catch (error) {
+      console.warn("[comments] failed to notify moderators of report", error);
+    }
+  }
+
   return { ok: true };
 }
 

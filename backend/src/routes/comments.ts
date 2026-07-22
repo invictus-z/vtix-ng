@@ -111,6 +111,7 @@ export const registerCommentRoutes = (app: Elysia) =>
       const result = await reportComment({
         commentId,
         reporterId: Number(user.id),
+        reporterName: user.name,
         reason,
       });
       if (result === null) {
