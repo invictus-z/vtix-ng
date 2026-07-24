@@ -134,6 +134,25 @@ function ensureSqliteProblemSetPendingColumn(
   }
 }
 
+// comment_floor_seq is declared in CREATE TABLE problems (fresh installs), but
+// a DB created before this feature (e.g. by master) already has `problems` and
+// won't get the column via CREATE TABLE IF NOT EXISTS. Add it here so the
+// comment feature runs on those DBs. Backfill not needed: comments are new, so
+// every existing problem correctly starts at seq 0 -> first comment is floor 1.
+function ensureSqliteProblemCommentFloorSeqColumn(
+  client: ReturnType<typeof assertSqliteClient>
+) {
+  const columns = client
+    .prepare("PRAGMA table_info(problems)")
+    .all() as Array<{ name?: string }>;
+  const hasColumn = columns.some((column) => column.name === "comment_floor_seq");
+  if (!hasColumn) {
+    client.exec(
+      "ALTER TABLE problems ADD COLUMN comment_floor_seq INTEGER NOT NULL DEFAULT 0;"
+    );
+  }
+}
+
 function ensureSqliteProblemSetStatsColumns(
   client: ReturnType<typeof assertSqliteClient>
 ) {
@@ -291,6 +310,21 @@ async function ensureMysqlProblemSetPendingColumn() {
   try {
     await execMysql(
       "ALTER TABLE problem_sets ADD COLUMN is_pending BOOLEAN NOT NULL DEFAULT FALSE;"
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.toLowerCase().includes("duplicate column")) {
+      throw error;
+    }
+  }
+}
+
+// See ensureSqliteProblemCommentFloorSeqColumn: backfill column for DBs that
+// predate the comment feature.
+async function ensureMysqlProblemCommentFloorSeqColumn() {
+  try {
+    await execMysql(
+      "ALTER TABLE problems ADD COLUMN comment_floor_seq INT NOT NULL DEFAULT 0;"
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -573,6 +607,7 @@ async function ensureSqliteTables() {
   `);
   ensureSqliteProblemSetTimestampColumns(client);
   ensureSqliteProblemSetPendingColumn(client);
+  ensureSqliteProblemCommentFloorSeqColumn(client);
   ensureSqliteProblemSetStatsColumns(client);
 }
 
@@ -689,6 +724,7 @@ async function ensureMysqlTables() {
   `);
   await ensureMysqlProblemSetTimestampColumns();
   await ensureMysqlProblemSetPendingColumn();
+  await ensureMysqlProblemCommentFloorSeqColumn();
   await ensureMysqlProblemSetStatsColumns();
   await execMysql(`
     CREATE TABLE IF NOT EXISTS categories (
