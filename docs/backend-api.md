@@ -359,6 +359,9 @@
   "activeUsers": 0,
   "visitCount": 0,
   "practiceCount": 0,
+  "commentCount": 0,
+  "likeCount": 0,
+  "reportCount": 0,
   "deltas": {
     "totalSets7d": 0,
     "publicSets7d": 0,
@@ -368,6 +371,7 @@
   }
 }
 ```
+`commentCount`/`likeCount`/`reportCount` 为评论、点赞、举报的累计总数（点赞按点赞记录表计、举报含已忽略）。
 
 ### 管理端题库列表
 `GET /api/admin/problem-sets`
