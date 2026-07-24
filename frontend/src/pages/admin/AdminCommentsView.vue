@@ -97,10 +97,13 @@ function handlePage(event: PageState) {
 
 function handleDelete(item: ReportedComment) {
   confirm.require({
-    message: '确定要删除这条被举报的评论吗？',
     header: '删除评论',
-    icon: 'pi pi-exclamation-triangle',
-    acceptClass: 'p-button-danger',
+    message: '确定删除这条被举报的评论吗？将同时移除它的点赞与举报记录。',
+    acceptLabel: '删除',
+    rejectLabel: '取消',
+    acceptProps: { severity: 'danger' },
+    rejectProps: { severity: 'secondary' },
+    defaultFocus: 'reject',
     accept: () => doDelete(item)
   })
 }
@@ -141,9 +144,12 @@ async function doDelete(item: ReportedComment) {
 
 function handleDismiss(item: ReportedComment) {
   confirm.require({
-    message: '确定忽略这条举报吗？仅移除该条举报记录，评论予以保留。',
     header: '忽略举报',
-    icon: 'pi pi-info-circle',
+    message: '确定忽略这条举报吗？仅移除该条举报记录，评论予以保留。',
+    acceptLabel: '忽略',
+    rejectLabel: '取消',
+    rejectProps: { severity: 'secondary' },
+    defaultFocus: 'reject',
     accept: () => doDismiss(item)
   })
 }

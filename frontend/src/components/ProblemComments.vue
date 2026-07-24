@@ -313,10 +313,13 @@ function handleDelete(comment: CommentItem) {
     return
   }
   confirm.require({
-    message: '确定要删除这条评论吗？',
     header: '删除评论',
-    icon: 'pi pi-exclamation-triangle',
-    acceptClass: 'p-button-danger',
+    message: '确定删除这条评论吗？',
+    acceptLabel: '删除',
+    rejectLabel: '取消',
+    acceptProps: { severity: 'danger' },
+    rejectProps: { severity: 'secondary' },
+    defaultFocus: 'reject',
     accept: () => doDelete(comment)
   })
 }
