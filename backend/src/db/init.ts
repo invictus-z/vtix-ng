@@ -38,6 +38,18 @@ function ensureSqliteMessagesReadColumn(
   }
 }
 
+function ensureSqliteCommentReplyColumn(
+  client: ReturnType<typeof assertSqliteClient>
+) {
+  const columns = client
+    .prepare("PRAGMA table_info(problem_comments)")
+    .all() as Array<{ name?: string }>;
+  const hasColumn = columns.some((column) => column.name === "reply_to_comment_id");
+  if (!hasColumn) {
+    client.exec("ALTER TABLE problem_comments ADD COLUMN reply_to_comment_id INTEGER;");
+  }
+}
+
 function ensureSqliteUserGroupLimitColumn(
   client: ReturnType<typeof assertSqliteClient>
 ) {
@@ -194,6 +206,17 @@ async function ensureMysqlMessagesReadColumn() {
     await execMysql(
       "ALTER TABLE messages ADD COLUMN is_read BOOLEAN NOT NULL DEFAULT FALSE;"
     );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.toLowerCase().includes("duplicate column")) {
+      throw error;
+    }
+  }
+}
+
+async function ensureMysqlCommentReplyColumn() {
+  try {
+    await execMysql("ALTER TABLE problem_comments ADD COLUMN reply_to_comment_id INT;");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.toLowerCase().includes("duplicate column")) {
@@ -452,6 +475,7 @@ async function ensureSqliteTables() {
   ensureSqliteBrawlRecordIndexes(client);
   ensureSqliteNoticePinnedColumn(client);
   ensureSqliteMessagesReadColumn(client);
+  ensureSqliteCommentReplyColumn(client);
   ensureSqliteUserRecordsDataColumn(client);
   ensureSqliteUserRecordsSyncColumns(client);
   client.exec(`
@@ -532,10 +556,12 @@ async function ensureSqliteTables() {
       content TEXT NOT NULL,
       floor INTEGER NOT NULL,
       like_count INTEGER NOT NULL DEFAULT 0,
+      reply_to_comment_id INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (reply_to_comment_id) REFERENCES problem_comments(id) ON DELETE SET NULL
     );
     CREATE INDEX IF NOT EXISTS idx_problem_comments_problem_floor
       ON problem_comments(problem_id, floor);
@@ -659,6 +685,7 @@ async function ensureMysqlTables() {
   await ensureMysqlBrawlRecordIndexes();
   await ensureMysqlNoticePinnedColumn();
   await ensureMysqlMessagesReadColumn();
+  await ensureMysqlCommentReplyColumn();
   await ensureMysqlUserRecordsDataColumn();
   await ensureMysqlUserRecordsSyncColumns();
   await execMysql(`
@@ -748,12 +775,15 @@ async function ensureMysqlTables() {
       content TEXT NOT NULL,
       floor INT NOT NULL,
       like_count INT NOT NULL DEFAULT 0,
+      reply_to_comment_id INT,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       CONSTRAINT fk_pc_problem_id FOREIGN KEY (problem_id)
         REFERENCES problems(id) ON DELETE CASCADE,
       CONSTRAINT fk_pc_user_id FOREIGN KEY (user_id)
         REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT fk_pc_reply_to FOREIGN KEY (reply_to_comment_id)
+        REFERENCES problem_comments(id) ON DELETE SET NULL,
       INDEX idx_problem_comments_problem_floor (problem_id, floor),
       INDEX idx_problem_comments_problem_id (problem_id, id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -194,6 +194,10 @@ export const problemComments = sqliteTable("problem_comments", {
   content: text("content").notNull(),
   floor: integer("floor").notNull(),
   likeCount: integer("like_count").notNull().default(0),
+  // Optional quote/reply target (another comment in the same problem). The
+  // self-referential FK (ON DELETE SET NULL) is declared in init.ts CREATE
+  // TABLE; not via .references() here to avoid a Drizzle self-type cycle.
+  replyToCommentId: integer("reply_to_comment_id"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });

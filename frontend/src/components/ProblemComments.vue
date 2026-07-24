@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Textarea from 'primevue/textarea'
@@ -19,6 +19,13 @@ const apiBase = import.meta.env.VITE_API_BASE ?? 'http://localhost:3000'
 const MAX_COMMENT_LENGTH = 500
 const MANAGE_COMMENTS_PERMISSION = 1 << 13
 
+type CommentReplyTo = {
+  commentId: number
+  floor: number
+  userName: string
+  snippet: string
+}
+
 type CommentItem = {
   id: number
   problemId: number
@@ -28,6 +35,7 @@ type CommentItem = {
   floor: number
   likeCount: number
   liked: boolean
+  replyTo: CommentReplyTo | null
   createdAt: number
   updatedAt: number
 }
@@ -54,6 +62,21 @@ const sortOptions = [
 const composerText = ref('')
 const submitting = ref(false)
 const likePending = ref<Set<number>>(new Set())
+const composerRef = ref<any>(null)
+// When set, the composer shows a "引用 N楼 @作者" banner and the submit will
+// attach replyToCommentId so the quoted author gets notified.
+const replyTarget = ref<{
+  id: number
+  floor: number
+  userName: string
+  snippet: string
+} | null>(null)
+
+const composerPlaceholder = computed(() =>
+  replyTarget.value
+    ? `回复 ${replyTarget.value.floor}楼 @${replyTarget.value.userName}…`
+    : '说说你对这道题的看法、巧妙记法或吐槽…'
+)
 
 const reportVisible = ref(false)
 const reportTargetId = ref<number | null>(null)
@@ -75,6 +98,34 @@ function formatRelativeTime(timestamp: number) {
   if (diff < 60 * 60 * 1000) return `${Math.floor(diff / (60 * 1000))} 分钟前`
   if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / (60 * 60 * 1000))} 小时前`
   return `${Math.floor(diff / (24 * 60 * 60 * 1000))} 天前`
+}
+
+function makeSnippet(text: string, max = 40) {
+  const t = (text ?? '').replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+function startReply(comment: CommentItem) {
+  if (!isLoggedIn.value) {
+    void pushLoginRequired(router)
+    return
+  }
+  replyTarget.value = {
+    id: comment.id,
+    floor: comment.floor,
+    userName: comment.userName || '匿名',
+    snippet: makeSnippet(comment.content)
+  }
+  void nextTick(() => {
+    const el = (composerRef.value?.$el ?? composerRef.value) as
+      | HTMLTextAreaElement
+      | undefined
+    el?.focus?.()
+  })
+}
+
+function clearReply() {
+  replyTarget.value = null
 }
 
 async function loadComments() {
@@ -138,7 +189,10 @@ async function submitComment() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ content })
+      body: JSON.stringify({
+        content,
+        ...(replyTarget.value ? { replyToCommentId: replyTarget.value.id } : {})
+      })
     })
     const data = (await response.json().catch(() => null)) as CommentItem | { error?: string } | null
     if (!response.ok) {
@@ -147,6 +201,7 @@ async function submitComment() {
       return
     }
     composerText.value = ''
+    replyTarget.value = null
     toast.add({ severity: 'success', summary: '已发表', life: 2000 })
     await reloadFromFirstPage()
   } catch (error) {
@@ -305,6 +360,7 @@ watch(
   () => props.problemId,
   () => {
     page.value = 1
+    replyTarget.value = null
     void loadComments()
   },
   { immediate: true }
@@ -334,12 +390,28 @@ watch(sort, () => {
     </header>
 
     <div v-if="isLoggedIn" class="composer">
+      <div v-if="replyTarget" class="reply-banner">
+        <span class="reply-icon pi pi-reply" aria-hidden="true" />
+        <span class="reply-text">
+          引用 {{ replyTarget.floor }}楼 @{{ replyTarget.userName }}：{{ replyTarget.snippet }}
+        </span>
+        <Button
+          icon="pi pi-times"
+          severity="secondary"
+          text
+          rounded
+          size="small"
+          aria-label="取消引用"
+          @click="clearReply"
+        />
+      </div>
       <Textarea
+        ref="composerRef"
         v-model="composerText"
         :auto-resize="true"
         rows="2"
         :maxlength="MAX_COMMENT_LENGTH"
-        placeholder="说说你对这道题的看法、巧妙记法或吐槽…"
+        :placeholder="composerPlaceholder"
         class="composer-input"
       />
       <div class="composer-foot">
@@ -377,6 +449,14 @@ watch(sort, () => {
               {{ formatRelativeTime(comment.createdAt) }}
             </time>
           </div>
+          <div v-if="comment.replyTo" class="quote-chip">
+            <span class="quote-icon pi pi-quote" aria-hidden="true" />
+            <span>
+              引用 {{ comment.replyTo.floor }}楼 @{{ comment.replyTo.userName }}：{{
+                comment.replyTo.snippet
+              }}
+            </span>
+          </div>
           <p class="comment-content">{{ comment.content }}</p>
         </div>
         <div class="comment-actions">
@@ -389,6 +469,15 @@ watch(sort, () => {
             :icon="comment.liked ? 'pi pi-thumbs-up-fill' : 'pi pi-thumbs-up'"
             :loading="likePending.has(comment.id)"
             @click="toggleLike(comment)"
+          />
+          <Button
+            v-if="isLoggedIn"
+            label="引用"
+            size="small"
+            severity="secondary"
+            text
+            icon="pi pi-reply"
+            @click="startReply(comment)"
           />
           <Button
             v-if="isLoggedIn && comment.userId !== userStore.user?.id"
@@ -490,6 +579,31 @@ watch(sort, () => {
   width: 100%;
 }
 
+.reply-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--vtix-surface);
+  border: 1px solid var(--vtix-border-strong);
+  font-size: 12px;
+  color: var(--vtix-text-muted);
+}
+
+.reply-icon {
+  color: var(--vtix-primary-600);
+  flex-shrink: 0;
+}
+
+.reply-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-foot {
   display: flex;
   align-items: center;
@@ -575,6 +689,25 @@ watch(sort, () => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.quote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--vtix-surface-2);
+  border: 1px solid var(--vtix-border);
+  font-size: 12px;
+  color: var(--vtix-text-muted);
+  line-height: 1.5;
+}
+
+.quote-icon {
+  color: var(--vtix-text-subtle);
+  flex-shrink: 0;
 }
 
 .comment-actions {

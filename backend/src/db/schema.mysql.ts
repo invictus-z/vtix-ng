@@ -195,6 +195,10 @@ export const problemComments = mysqlTable("problem_comments", {
   content: text("content").notNull(),
   floor: int("floor").notNull(),
   likeCount: int("like_count").notNull().default(0),
+  // Optional quote/reply target (another comment in the same problem). The
+  // self-referential FK (ON DELETE SET NULL) is declared in init.ts CREATE
+  // TABLE; not via .references() here to avoid a Drizzle self-type cycle.
+  replyToCommentId: int("reply_to_comment_id"),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });

@@ -19,6 +19,13 @@ export const MAX_COMMENT_LENGTH = 500;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 5;
 
+export type CommentReplyTo = {
+  commentId: number;
+  floor: number;
+  userName: string;
+  snippet: string;
+};
+
 export type CommentPayload = {
   id: number;
   problemId: number;
@@ -28,6 +35,7 @@ export type CommentPayload = {
   floor: number;
   likeCount: number;
   liked: boolean;
+  replyTo: CommentReplyTo | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -74,11 +82,17 @@ function toCommentPayload(
     content: string;
     floor: number;
     likeCount: number;
+    replyToCommentId: number | null;
     createdAt: number;
     updatedAt: number;
   },
-  liked: boolean
+  liked: boolean,
+  replyToMap: Map<number, CommentReplyTo>
 ): CommentPayload {
+  const replyTo =
+    row.replyToCommentId != null
+      ? replyToMap.get(Number(row.replyToCommentId)) ?? null
+      : null;
   return {
     id: Number(row.id),
     problemId: Number(row.problemId),
@@ -88,6 +102,7 @@ function toCommentPayload(
     floor: Number(row.floor),
     likeCount: Number(row.likeCount ?? 0),
     liked,
+    replyTo,
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
   };
@@ -169,6 +184,7 @@ export async function loadCommentsPage(options: {
       content: problemComments.content,
       floor: problemComments.floor,
       likeCount: problemComments.likeCount,
+      replyToCommentId: problemComments.replyToCommentId,
       createdAt: problemComments.createdAt,
       updatedAt: problemComments.updatedAt,
     })
@@ -184,6 +200,7 @@ export async function loadCommentsPage(options: {
     content: string;
     floor: number;
     likeCount: number;
+    replyToCommentId: number | null;
     createdAt: number;
     updatedAt: number;
   }>;
@@ -203,9 +220,40 @@ export async function loadCommentsPage(options: {
     likedSet = new Set(likes.map((like: { commentId: number }) => Number(like.commentId)));
   }
 
+  // Batch-resolve quoted parent comments (one query, keyed by replyToCommentId),
+  // mirroring the likedSet batch. Parents may live on another page/sort order, so
+  // resolve by id regardless. A missing parent (deleted) yields no entry -> null.
+  const replyToMap = new Map<number, CommentReplyTo>();
+  const replyIds = Array.from(
+    new Set(
+      rows
+        .map((row) => Number(row.replyToCommentId))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )
+  );
+  if (replyIds.length > 0) {
+    const parents = await db
+      .select({
+        id: problemComments.id,
+        floor: problemComments.floor,
+        userName: problemComments.userName,
+        content: problemComments.content,
+      })
+      .from(problemComments)
+      .where(inArray(problemComments.id, replyIds));
+    for (const p of parents) {
+      replyToMap.set(Number(p.id), {
+        commentId: Number(p.id),
+        floor: Number(p.floor),
+        userName: p.userName,
+        snippet: buildCommentSnippet(p.content),
+      });
+    }
+  }
+
   return {
     items: rows.map((row) =>
-      toCommentPayload(row, likedSet.has(Number(row.id)))
+      toCommentPayload(row, likedSet.has(Number(row.id)), replyToMap)
     ),
     total,
   };
@@ -215,6 +263,7 @@ export async function createComment(options: {
   problemId: number;
   user: User;
   content: string;
+  replyToCommentId?: number;
 }): Promise<CommentPayload | { error: string } | null> {
   const { problemId, user } = options;
   const userId = Number(user.id);
@@ -238,9 +287,45 @@ export async function createComment(options: {
     return null;
   }
 
+  // Validate the quote target: it must exist and belong to the same problem.
+  // An invalid/missing/cross-problem target is silently ignored — the comment
+  // is still created, just without a back-reference.
+  type ResolvedReply = {
+    commentId: number;
+    floor: number;
+    userName: string;
+    snippet: string;
+    authorId: number;
+  };
+  let resolvedReply: ResolvedReply | null = null;
+  const replyRaw = Number(options.replyToCommentId);
+  if (Number.isFinite(replyRaw) && replyRaw > 0) {
+    const [parent] = await db
+      .select({
+        id: problemComments.id,
+        problemId: problemComments.problemId,
+        userId: problemComments.userId,
+        userName: problemComments.userName,
+        floor: problemComments.floor,
+        content: problemComments.content,
+      })
+      .from(problemComments)
+      .where(eq(problemComments.id, replyRaw))
+      .limit(1);
+    if (parent && Number(parent.problemId) === problemId) {
+      resolvedReply = {
+        commentId: Number(parent.id),
+        floor: Number(parent.floor),
+        userName: parent.userName,
+        snippet: buildCommentSnippet(parent.content),
+        authorId: Number(parent.userId),
+      };
+    }
+  }
+
   const now = Date.now();
 
-  return db.transaction(async (tx: typeof db) => {
+  const created = await db.transaction(async (tx: typeof db) => {
     const [countRow] = await tx
       .select({ count: sql<number>`count(*)` })
       .from(problemComments)
@@ -254,6 +339,7 @@ export async function createComment(options: {
       content: trimmed,
       floor,
       likeCount: 0,
+      replyToCommentId: resolvedReply ? resolvedReply.commentId : null,
       createdAt: now,
       updatedAt: now,
     };
@@ -273,19 +359,53 @@ export async function createComment(options: {
       throw new Error("Failed to insert comment.");
     }
 
-    return {
-      id,
-      problemId,
-      userId: String(userId),
-      userName: user.name,
-      content: trimmed,
-      floor,
-      likeCount: 0,
-      liked: false,
-      createdAt: now,
-      updatedAt: now,
-    };
+    return { id, floor };
   });
+
+  // Notify the quoted comment's author (message type 4 = comment quote/reply).
+  // Skip self-quotes; never block the post on notification failure.
+  // Mirrors the like-notification pattern in toggleCommentLike.
+  if (resolvedReply && resolvedReply.authorId !== userId) {
+    try {
+      const context = await resolveProblemContext(problemId);
+      const snippet = buildCommentSnippet(trimmed);
+      const content = context
+        ? `${user.name} 在《${context.title}》第${context.questionNumber}题引用了你的评论：${snippet}`
+        : `${user.name} 引用了你的评论：${snippet}`;
+      await createMessage({
+        senderId: userId,
+        senderName: user.name,
+        receiverId: resolvedReply.authorId,
+        receiverName: resolvedReply.userName,
+        content,
+        type: 4,
+        link: null,
+      });
+    } catch (error) {
+      console.warn("[comments] failed to notify quoted comment author", error);
+    }
+  }
+
+  return {
+    id: created.id,
+    problemId,
+    userId: String(userId),
+    userName: user.name,
+    content: trimmed,
+    floor: created.floor,
+    likeCount: 0,
+    liked: false,
+    replyTo: resolvedReply
+      ? {
+          commentId: resolvedReply.commentId,
+          floor: resolvedReply.floor,
+          userName: resolvedReply.userName,
+          snippet: resolvedReply.snippet,
+        }
+      : null,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 export async function toggleCommentLike(options: {

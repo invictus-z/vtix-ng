@@ -57,10 +57,13 @@ export const registerCommentRoutes = (app: Elysia) =>
         set.status = 429;
         return { error: "评论过于频繁，请稍后再试。" };
       }
-      const payload = (body ?? {}) as { content?: string };
+      const payload = (body ?? {}) as { content?: string; replyToCommentId?: number };
       const content = typeof payload.content === "string" ? payload.content : "";
+      const replyRaw = Number(payload.replyToCommentId);
+      const replyToCommentId =
+        Number.isFinite(replyRaw) && replyRaw > 0 ? replyRaw : undefined;
 
-      const result = await createComment({ problemId, user, content });
+      const result = await createComment({ problemId, user, content, replyToCommentId });
       if (result === null) {
         set.status = 404;
         return { error: "题目不存在。" };
