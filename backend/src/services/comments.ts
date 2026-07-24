@@ -19,6 +19,11 @@ export const MAX_COMMENT_LENGTH = 500;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 5;
 
+// Report lifecycle: 'open' = awaiting moderation, 'dismissed' = moderator kept
+// the comment. Dismissing is a soft status flip (not a delete) so reports stay
+// as an audit trail; the admin queue only surfaces 'open' reports.
+const REPORT_STATUS = { OPEN: "open", DISMISSED: "dismissed" } as const;
+
 export type CommentReplyTo = {
   commentId: number;
   floor: number;
@@ -41,8 +46,13 @@ export type CommentPayload = {
   updatedAt: number;
 };
 
-export type ReportedCommentPayload = {
+export type ReportedCommentReport = {
   reportId: number;
+  reason: string | null;
+  createdAt: number;
+};
+
+export type ReportedCommentGroupPayload = {
   commentId: number;
   problemId: number;
   setTitle: string | null;
@@ -51,10 +61,10 @@ export type ReportedCommentPayload = {
   commentContent: string;
   floor: number;
   likeCount: number;
-  reporterId: number;
-  reason: string | null;
-  status: string;
-  createdAt: number;
+  openCount: number;
+  totalCount: number;
+  latestReportAt: number;
+  reports: ReportedCommentReport[];
 };
 
 // In-memory, single-process rate limiter for posting comments.
@@ -611,19 +621,25 @@ export async function reportComment(options: {
     return { ok: true, alreadyReported: true };
   }
 
-  // Only notify moderators on a comment's first report, so repeat reports on the
-  // same comment don't spam their inbox.
+  // Notify moderators only when a comment currently has NO open reports, i.e.
+  // each new "wave" of reports (after the previous wave was dismissed) pings
+  // once. Dismissed reports don't count, so a re-report after dismiss notifies.
   const [countRow] = await db
     .select({ count: sql<number>`count(*)` })
     .from(problemCommentReports)
-    .where(eq(problemCommentReports.commentId, commentId));
+    .where(
+      and(
+        eq(problemCommentReports.commentId, commentId),
+        eq(problemCommentReports.status, REPORT_STATUS.OPEN)
+      )
+    );
   const firstReport = Number(countRow?.count ?? 0) === 0;
 
   await db.insert(problemCommentReports).values({
     commentId,
     reporterId,
     reason,
-    status: "open",
+    status: REPORT_STATUS.OPEN,
     createdAt: Date.now(),
   });
 
@@ -675,93 +691,140 @@ export async function deleteComment(options: {
   return { ok: true, allowed: true };
 }
 
-// A moderator dismissed a report: drop the report row but keep the comment
-// (and its likes / other reports on it). Idempotent — deleting a row that is
-// already gone is a no-op.
-export async function dismissCommentReport(options: {
-  reportId: number;
+// A moderator kept the comment: flip ALL of its open reports to 'dismissed'
+// (the reports stay as an audit trail; they just leave the open queue).
+// Idempotent.
+export async function dismissOpenReportsForComment(options: {
+  commentId: number;
 }): Promise<{ ok: boolean }> {
   await db
-    .delete(problemCommentReports)
-    .where(eq(problemCommentReports.id, options.reportId));
+    .update(problemCommentReports)
+    .set({ status: REPORT_STATUS.DISMISSED })
+    .where(
+      and(
+        eq(problemCommentReports.commentId, options.commentId),
+        eq(problemCommentReports.status, REPORT_STATUS.OPEN)
+      )
+    );
   return { ok: true };
 }
 
-export async function loadReportedCommentsPage(options: {
+export async function loadReportedCommentsGrouped(options: {
   page: number;
   pageSize: number;
-}): Promise<{ items: ReportedCommentPayload[]; total: number }> {
+}): Promise<{ items: ReportedCommentGroupPayload[]; total: number }> {
   const { page, pageSize } = options;
   const offset = Math.max(0, (page - 1) * pageSize);
 
+  // total = number of distinct comments currently carrying an open report.
   const [countRow] = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(problemCommentReports);
+    .select({
+      count: sql<number>`count(distinct ${problemCommentReports.commentId})`,
+    })
+    .from(problemCommentReports)
+    .where(eq(problemCommentReports.status, REPORT_STATUS.OPEN));
   const total = Number(countRow?.count ?? 0);
 
+  // One row per comment that has >=1 open report, with open/total counts and
+  // the latest open-report time for ordering. Set context via correlated
+  // subqueries (mirrors resolveProblemContext; avoids the multi-set fan-out).
   const rows = (await db
     .select({
-      reportId: problemCommentReports.id,
-      commentId: problemCommentReports.commentId,
+      commentId: problemComments.id,
       problemId: problemComments.problemId,
       commentUserName: problemComments.userName,
       commentContent: problemComments.content,
       floor: problemComments.floor,
       likeCount: problemComments.likeCount,
-      reporterId: problemCommentReports.reporterId,
-      reason: problemCommentReports.reason,
-      status: problemCommentReports.status,
-      createdAt: problemCommentReports.createdAt,
-      // Pick ONE set per problem (the most recently updated) via correlated
-      // subqueries, instead of LEFT JOINing problem_set_problems. A problem can
-      // belong to several sets (its PK is (problem_set_id, problem_id)), so a
-      // plain join would fan each report out into N duplicate rows. This mirrors
-      // resolveProblemContext's pick rule.
+      openCount: sql<number>`(
+        select count(*) from problem_comment_reports r
+        where r.comment_id = problem_comments.id and r.status = 'open'
+      )`,
+      totalCount: sql<number>`(
+        select count(*) from problem_comment_reports r
+        where r.comment_id = problem_comments.id
+      )`,
+      latestReportAt: sql<number>`(
+        select max(r.created_at) from problem_comment_reports r
+        where r.comment_id = problem_comments.id and r.status = 'open'
+      )`,
       setTitle: sql<string | null>`(
-        select ps.title
-        from problem_set_problems psp
+        select ps.title from problem_set_problems psp
         inner join problem_sets ps on ps.id = psp.problem_set_id
-        where psp.problem_id = ${problemComments.problemId}
+        where psp.problem_id = problem_comments.problem_id
         order by ps.updated_at desc
         limit 1
       )`,
       orderIndex: sql<number | null>`(
-        select psp.order_index
-        from problem_set_problems psp
+        select psp.order_index from problem_set_problems psp
         inner join problem_sets ps on ps.id = psp.problem_set_id
-        where psp.problem_id = ${problemComments.problemId}
+        where psp.problem_id = problem_comments.problem_id
         order by ps.updated_at desc
         limit 1
       )`,
     })
-    .from(problemCommentReports)
-    .innerJoin(
-      problemComments,
-      eq(problemCommentReports.commentId, problemComments.id)
+    .from(problemComments)
+    .where(
+      sql`exists (select 1 from problem_comment_reports r where r.comment_id = problem_comments.id and r.status = 'open')`
     )
-    .orderBy(desc(problemCommentReports.createdAt))
+    .orderBy(
+      sql`(select max(r.created_at) from problem_comment_reports r where r.comment_id = problem_comments.id and r.status = 'open') desc`
+    )
     .limit(pageSize)
     .offset(offset)) as Array<{
-    reportId: number;
     commentId: number;
     problemId: number;
     commentUserName: string;
     commentContent: string;
     floor: number;
     likeCount: number;
-    reporterId: number;
-    reason: string | null;
-    status: string;
-    createdAt: number;
+    openCount: number;
+    totalCount: number;
+    latestReportAt: number;
     setTitle: string | null;
     orderIndex: number | null;
   }>;
 
+  // Batch-load the open reports (reasons) for this page's comments in one query.
+  const reportsByComment = new Map<number, ReportedCommentReport[]>();
+  if (rows.length > 0) {
+    const ids = rows.map((r) => Number(r.commentId));
+    const openReports = (await db
+      .select({
+        reportId: problemCommentReports.id,
+        commentId: problemCommentReports.commentId,
+        reason: problemCommentReports.reason,
+        createdAt: problemCommentReports.createdAt,
+      })
+      .from(problemCommentReports)
+      .where(
+        and(
+          eq(problemCommentReports.status, REPORT_STATUS.OPEN),
+          inArray(problemCommentReports.commentId, ids)
+        )
+      )
+      .orderBy(desc(problemCommentReports.createdAt))) as Array<{
+      reportId: number;
+      commentId: number;
+      reason: string | null;
+      createdAt: number;
+    }>;
+    for (const r of openReports) {
+      const cid = Number(r.commentId);
+      const arr = reportsByComment.get(cid) ?? [];
+      arr.push({
+        reportId: Number(r.reportId),
+        reason: r.reason,
+        createdAt: Number(r.createdAt),
+      });
+      reportsByComment.set(cid, arr);
+    }
+  }
+
   return {
     items: rows.map((row) => ({
-      reportId: row.reportId,
-      commentId: row.commentId,
-      problemId: row.problemId,
+      commentId: Number(row.commentId),
+      problemId: Number(row.problemId),
       setTitle: row.setTitle ?? null,
       questionNumber:
         Number.isFinite(Number(row.orderIndex)) && Number(row.orderIndex) >= 0
@@ -769,12 +832,12 @@ export async function loadReportedCommentsPage(options: {
           : null,
       commentUserName: row.commentUserName,
       commentContent: row.commentContent,
-      floor: row.floor,
-      likeCount: row.likeCount,
-      reporterId: row.reporterId,
-      reason: row.reason,
-      status: row.status,
-      createdAt: row.createdAt,
+      floor: Number(row.floor),
+      likeCount: Number(row.likeCount),
+      openCount: Number(row.openCount ?? 0),
+      totalCount: Number(row.totalCount ?? 0),
+      latestReportAt: Number(row.latestReportAt ?? 0),
+      reports: reportsByComment.get(Number(row.commentId)) ?? [],
     })),
     total,
   };

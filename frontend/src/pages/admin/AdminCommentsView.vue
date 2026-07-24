@@ -15,8 +15,13 @@ const toast = useToast()
 const confirm = useConfirm()
 const userStore = useUserStore()
 
-type ReportedComment = {
+type ReportedReport = {
   reportId: number
+  reason: string | null
+  createdAt: number
+}
+
+type ReportedCommentGroup = {
   commentId: number
   problemId: number
   setTitle: string | null
@@ -25,13 +30,13 @@ type ReportedComment = {
   commentContent: string
   floor: number
   likeCount: number
-  reporterId: number
-  reason: string | null
-  status: string
-  createdAt: number
+  openCount: number
+  totalCount: number
+  latestReportAt: number
+  reports: ReportedReport[]
 }
 
-const items = ref<ReportedComment[]>([])
+const items = ref<ReportedCommentGroup[]>([])
 const loading = ref(false)
 const loadError = ref('')
 const page = ref(1)
@@ -57,7 +62,7 @@ function formatRelativeTime(timestamp: number) {
   return `${Math.floor(diff / (24 * 60 * 60 * 1000))} 天前`
 }
 
-function problemLabel(item: ReportedComment) {
+function problemLabel(item: ReportedCommentGroup) {
   const title = item.setTitle?.trim()
   if (title && item.questionNumber) return `《${title}》第${item.questionNumber}题`
   if (title) return `《${title}》`
@@ -73,7 +78,7 @@ async function loadItems() {
       { credentials: 'include' }
     )
     if (!response.ok) throw new Error(`加载失败: ${response.status}`)
-    const data = (await response.json()) as ReportedComment[]
+    const data = (await response.json()) as ReportedCommentGroup[]
     items.value = Array.isArray(data) ? data : []
     const totalHeader = response.headers.get('x-total-count')
     const totalNum = totalHeader ? Number(totalHeader) : NaN
@@ -95,10 +100,10 @@ function handlePage(event: PageState) {
   void loadItems()
 }
 
-function handleDelete(item: ReportedComment) {
+function handleDelete(item: ReportedCommentGroup) {
   confirm.require({
     header: '删除评论',
-    message: '确定删除这条被举报的评论吗？将同时移除它的点赞与举报记录。',
+    message: '确定删除这条评论吗？将同时移除它的全部点赞与举报记录。',
     acceptLabel: '删除',
     rejectLabel: '取消',
     acceptProps: { severity: 'danger' },
@@ -108,7 +113,7 @@ function handleDelete(item: ReportedComment) {
   })
 }
 
-async function doDelete(item: ReportedComment) {
+async function doDelete(item: ReportedCommentGroup) {
   deletingId.value = item.commentId
   try {
     const response = await fetch(`${apiBase}/api/comments/${item.commentId}`, {
@@ -142,10 +147,10 @@ async function doDelete(item: ReportedComment) {
   }
 }
 
-function handleDismiss(item: ReportedComment) {
+function handleDismiss(item: ReportedCommentGroup) {
   confirm.require({
     header: '忽略举报',
-    message: '确定忽略这条举报吗？仅移除该条举报记录，评论予以保留。',
+    message: `确定忽略这 ${item.openCount} 条举报吗？仅移除待处理举报，评论予以保留。`,
     acceptLabel: '忽略',
     rejectLabel: '取消',
     rejectProps: { severity: 'secondary' },
@@ -154,13 +159,13 @@ function handleDismiss(item: ReportedComment) {
   })
 }
 
-async function doDismiss(item: ReportedComment) {
-  dismissingId.value = item.reportId
+async function doDismiss(item: ReportedCommentGroup) {
+  dismissingId.value = item.commentId
   try {
     const response = await fetch(
-      `${apiBase}/api/admin/comments/reports/${item.reportId}`,
+      `${apiBase}/api/admin/comments/${item.commentId}/dismiss-reports`,
       {
-        method: 'DELETE',
+        method: 'POST',
         credentials: 'include'
       }
     )
@@ -203,7 +208,7 @@ onMounted(() => {
         <div class="eyebrow">评论管理</div>
         <h1>举报处理</h1>
         <p>
-          处理用户举报的评论。删除评论会同时移除其全部点赞与举报记录；忽略仅移除该条举报记录，评论予以保留。
+          按被举报的评论聚合展示。「忽略」会清掉该评论的全部待处理举报（评论保留）；「删除评论」会移除评论及其全部点赞与举报记录。
         </p>
       </div>
     </header>
@@ -221,9 +226,9 @@ onMounted(() => {
     <Card v-else class="report-card">
       <template #content>
         <div v-if="loading" class="state-text">加载中…</div>
-        <div v-else-if="!items.length" class="state-text">暂无被举报的评论</div>
+        <div v-else-if="!items.length" class="state-text">暂无待处理举报</div>
         <ul v-else class="report-list">
-          <li v-for="item in items" :key="item.reportId" class="report-item">
+          <li v-for="item in items" :key="item.commentId" class="report-item">
             <div class="report-main">
               <div class="report-meta">
                 <Tag severity="secondary">{{ item.floor }}楼</Tag>
@@ -231,20 +236,33 @@ onMounted(() => {
                 <span class="report-dot">·</span>
                 <span class="report-sub">{{ problemLabel(item) }}</span>
                 <span class="report-dot">·</span>
-                <time class="report-sub">{{ formatRelativeTime(item.createdAt) }}</time>
+                <time class="report-sub">{{ formatRelativeTime(item.latestReportAt) }}</time>
               </div>
               <p class="report-content">{{ item.commentContent }}</p>
-              <div class="report-reason">
-                <span class="reason-label">举报理由：</span>
-                <span class="reason-text">{{ item.reason || '未填写' }}</span>
+              <div class="report-summary">
+                <span class="summary-count">
+                  待处理举报 <strong>{{ item.openCount }}</strong> 条
+                </span>
+                <span class="summary-sep">·</span>
+                <span class="summary-total">累计共被举报 {{ item.totalCount }} 次</span>
+              </div>
+              <div v-if="item.reports.length" class="report-reasons">
+                <Tag
+                  v-for="r in item.reports"
+                  :key="r.reportId"
+                  severity="warn"
+                  class="reason-tag"
+                >
+                  {{ r.reason || '未填写' }}
+                </Tag>
               </div>
             </div>
             <div class="report-actions">
               <Button
-                label="忽略"
+                :label="`忽略这 ${item.openCount} 条`"
                 severity="secondary"
                 size="small"
-                :loading="dismissingId === item.reportId"
+                :loading="dismissingId === item.commentId"
                 @click="handleDismiss(item)"
               />
               <Button
@@ -382,14 +400,34 @@ onMounted(() => {
   word-break: break-word;
 }
 
-.report-reason {
+.report-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: var(--vtix-text-muted);
 }
 
-.reason-label {
+.report-summary strong {
   color: var(--vtix-danger-text);
-  font-weight: 700;
+}
+
+.summary-sep {
+  color: var(--vtix-text-subtle);
+}
+
+.summary-total {
+  color: var(--vtix-text-subtle);
+}
+
+.report-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reason-tag {
+  font-size: 11px;
 }
 
 .report-actions {

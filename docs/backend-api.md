@@ -594,7 +594,7 @@
 ```json
 { "ok": true, "alreadyReported": false }
 ```
-某评论被**首次举报**时，所有持 `MANAGE_COMMENTS` 的用户收到一条 `type=3`（举报通知）消息，`link` 指向 `/admin/comments`；重复举报不再通知。
+当某评论**当前没有待处理（open）举报**时收到一条新举报，所有持 `MANAGE_COMMENTS` 的用户会收到一条 `type=3`（举报通知）消息，`link` 指向 `/admin/comments`。即每一「波」举报只通知一次；管理员把这波举报忽略（置为 `dismissed`）后，若再收到新举报会再次通知。举报记录带 `status`：`open`（待处理）/ `dismissed`（已忽略，评论保留）。
 
 ### 删除评论
 `DELETE /api/comments/:id`
@@ -614,19 +614,18 @@
 - `403`：无权删除
 - `404`：评论不存在
 
-### 被举报评论列表（管理端）
+### 被举报评论列表（管理端，按评论聚合）
 `GET /api/admin/comments/reported`
 
 **需要登录 + 权限 `MANAGE_COMMENTS`**
 
 **Query**
-- `page`（默认 1）、`pageSize`（默认 20）
+- `page`（默认 1）、`pageSize`（默认 20，按**评论**分页）
 
 **Response**
 ```json
 [
   {
-    "reportId": 1,
     "commentId": 1,
     "problemId": 1,
     "setTitle": "string|null",
@@ -635,25 +634,28 @@
     "commentContent": "string",
     "floor": 1,
     "likeCount": 0,
-    "reporterId": 1,
-    "reason": "string|null",
-    "status": "open",
-    "createdAt": 1710000000000
+    "openCount": 3,
+    "totalCount": 5,
+    "latestReportAt": 1710000000000,
+    "reports": [
+      { "reportId": 1, "reason": "string|null", "createdAt": 1710000000000 }
+    ]
   }
 ]
 ```
-响应头 `x-total-count` 为举报记录总数。`setTitle`/`questionNumber` 取该题所属题库（多题集时取最近更新的一个）。
+只返回**仍有 `open` 举报**的评论，按最新 open 举报时间倒序。`openCount` 为当前待处理数，`totalCount` 为累计（含已忽略）。响应头 `x-total-count` 为待处理评论数。`setTitle`/`questionNumber` 取该题所属题库（多题集时取最近更新的一个）。
 
-### 忽略举报（管理端）
-`DELETE /api/admin/comments/reports/:reportId`
+### 忽略举报（管理端，按评论批量）
+`POST /api/admin/comments/:id/dismiss-reports`
 
 **需要登录 + 权限 `MANAGE_COMMENTS`**
 
-仅移除该条举报记录，**保留评论**（区别于删除评论）。幂等。
+把该评论的全部 `open` 举报置为 `dismissed`（**保留评论**，举报记录留作审计）。幂等。
 
 **Response**
 ```json
 { "ok": true }
+```
 ```
 
 ## 练习记录同步

@@ -3,9 +3,9 @@ import {
   checkCommentRateLimit,
   createComment,
   deleteComment,
-  dismissCommentReport,
+  dismissOpenReportsForComment,
   loadCommentsPage,
-  loadReportedCommentsPage,
+  loadReportedCommentsGrouped,
   reportComment,
   toggleCommentLike,
 } from "../services/comments";
@@ -154,11 +154,11 @@ export const registerCommentRoutes = (app: Elysia) =>
       }
       const page = normalizePage((query as any)?.page);
       const pageSize = normalizePageSize((query as any)?.pageSize, 20);
-      const { items, total } = await loadReportedCommentsPage({ page, pageSize });
+      const { items, total } = await loadReportedCommentsGrouped({ page, pageSize });
       set.headers["x-total-count"] = String(total);
       return items;
     })
-    .delete("/api/admin/comments/reports/:reportId", async ({ params, request, set }) => {
+    .post("/api/admin/comments/:id/dismiss-reports", async ({ params, request, set }) => {
       const user = getSessionUser(request);
       if (!user) {
         set.status = 401;
@@ -168,11 +168,11 @@ export const registerCommentRoutes = (app: Elysia) =>
         set.status = 403;
         return { error: "Forbidden" };
       }
-      const reportId = Number(params.reportId);
-      if (!Number.isFinite(reportId) || reportId <= 0) {
+      const commentId = Number(params.id);
+      if (!Number.isFinite(commentId) || commentId <= 0) {
         set.status = 400;
-        return { error: "Invalid report id." };
+        return { error: "Invalid comment id." };
       }
-      await dismissCommentReport({ reportId });
+      await dismissOpenReportsForComment({ commentId });
       return { ok: true };
     });
