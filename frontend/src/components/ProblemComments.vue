@@ -24,6 +24,7 @@ type CommentReplyTo = {
   floor: number
   userName: string
   snippet: string
+  deleted: boolean
 }
 
 type CommentItem = {
@@ -452,7 +453,10 @@ watch(sort, () => {
               {{ formatRelativeTime(comment.createdAt) }}
             </time>
           </div>
-          <div v-if="comment.replyTo" class="quote-chip">
+          <div
+            v-if="comment.replyTo"
+            :class="['quote-chip', { deleted: comment.replyTo.deleted }]"
+          >
             <span class="quote-icon pi pi-quote" aria-hidden="true" />
             <span>
               引用 {{ comment.replyTo.floor }}楼 @{{ comment.replyTo.userName }}：{{
@@ -711,6 +715,15 @@ watch(sort, () => {
 .quote-icon {
   color: var(--vtix-text-subtle);
   flex-shrink: 0;
+}
+
+.quote-chip.deleted {
+  font-style: italic;
+  color: var(--vtix-text-subtle);
+}
+
+.quote-chip.deleted .quote-icon {
+  opacity: 0.6;
 }
 
 .comment-actions {

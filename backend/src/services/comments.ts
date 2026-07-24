@@ -24,6 +24,7 @@ export type CommentReplyTo = {
   floor: number;
   userName: string;
   snippet: string;
+  deleted: boolean;
 };
 
 export type CommentPayload = {
@@ -83,16 +84,31 @@ function toCommentPayload(
     floor: number;
     likeCount: number;
     replyToCommentId: number | null;
+    replyToFloor: number | null;
+    replyToUserName: string | null;
     createdAt: number;
     updatedAt: number;
   },
   liked: boolean,
   replyToMap: Map<number, CommentReplyTo>
 ): CommentPayload {
-  const replyTo =
-    row.replyToCommentId != null
-      ? replyToMap.get(Number(row.replyToCommentId)) ?? null
-      : null;
+  let replyTo: CommentReplyTo | null = null;
+  if (row.replyToCommentId != null) {
+    const live = replyToMap.get(Number(row.replyToCommentId));
+    if (live) {
+      // Parent still exists -> show its live floor/author/snippet.
+      replyTo = { ...live, deleted: false };
+    } else if (row.replyToFloor != null) {
+      // Parent was deleted -> keep floor/author (denormalized), mark content.
+      replyTo = {
+        commentId: Number(row.replyToCommentId),
+        floor: Number(row.replyToFloor),
+        userName: row.replyToUserName ?? "",
+        snippet: "（原评论已被删除）",
+        deleted: true,
+      };
+    }
+  }
   return {
     id: Number(row.id),
     problemId: Number(row.problemId),
@@ -185,6 +201,8 @@ export async function loadCommentsPage(options: {
       floor: problemComments.floor,
       likeCount: problemComments.likeCount,
       replyToCommentId: problemComments.replyToCommentId,
+      replyToFloor: problemComments.replyToFloor,
+      replyToUserName: problemComments.replyToUserName,
       createdAt: problemComments.createdAt,
       updatedAt: problemComments.updatedAt,
     })
@@ -201,6 +219,8 @@ export async function loadCommentsPage(options: {
     floor: number;
     likeCount: number;
     replyToCommentId: number | null;
+    replyToFloor: number | null;
+    replyToUserName: string | null;
     createdAt: number;
     updatedAt: number;
   }>;
@@ -222,7 +242,9 @@ export async function loadCommentsPage(options: {
 
   // Batch-resolve quoted parent comments (one query, keyed by replyToCommentId),
   // mirroring the likedSet batch. Parents may live on another page/sort order, so
-  // resolve by id regardless. A missing parent (deleted) yields no entry -> null.
+  // resolve by id regardless. A parent missing from this map was deleted; the
+  // denormalized replyToFloor/replyToUserName on the child drive the "（原评论已被删除）"
+  // marker in toCommentPayload.
   const replyToMap = new Map<number, CommentReplyTo>();
   const replyIds = Array.from(
     new Set(
@@ -247,6 +269,7 @@ export async function loadCommentsPage(options: {
         floor: Number(p.floor),
         userName: p.userName,
         snippet: buildCommentSnippet(p.content),
+        deleted: false,
       });
     }
   }
@@ -365,6 +388,8 @@ export async function createComment(options: {
       floor,
       likeCount: 0,
       replyToCommentId: resolvedReply ? resolvedReply.commentId : null,
+      replyToFloor: resolvedReply ? resolvedReply.floor : null,
+      replyToUserName: resolvedReply ? resolvedReply.userName : null,
       createdAt: now,
       updatedAt: now,
     };
@@ -426,6 +451,7 @@ export async function createComment(options: {
           floor: resolvedReply.floor,
           userName: resolvedReply.userName,
           snippet: resolvedReply.snippet,
+          deleted: false,
         }
       : null,
     createdAt: now,

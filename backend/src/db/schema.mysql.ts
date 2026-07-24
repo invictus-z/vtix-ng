@@ -198,10 +198,13 @@ export const problemComments = mysqlTable("problem_comments", {
   content: text("content").notNull(),
   floor: int("floor").notNull(),
   likeCount: int("like_count").notNull().default(0),
-  // Optional quote/reply target (another comment in the same problem). The
-  // self-referential FK (ON DELETE SET NULL) is declared in init.ts CREATE
-  // TABLE; not via .references() here to avoid a Drizzle self-type cycle.
+  // Optional quote/reply target (another comment in the same problem). No FK:
+  // we keep the id after the parent is deleted so the chip can render a
+  // "（原评论已被删除）" marker. floor/userName are denormalized at reply time
+  // so the quote context survives the parent's deletion.
   replyToCommentId: int("reply_to_comment_id"),
+  replyToFloor: int("reply_to_floor"),
+  replyToUserName: varchar("reply_to_user_name", { length: 255 }),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });

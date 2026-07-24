@@ -534,11 +534,12 @@ async function ensureSqliteTables() {
       floor INTEGER NOT NULL,
       like_count INTEGER NOT NULL DEFAULT 0,
       reply_to_comment_id INTEGER,
+      reply_to_floor INTEGER,
+      reply_to_user_name TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (reply_to_comment_id) REFERENCES problem_comments(id) ON DELETE SET NULL
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_problem_comments_problem_floor
       ON problem_comments(problem_id, floor);
@@ -753,14 +754,14 @@ async function ensureMysqlTables() {
       floor INT NOT NULL,
       like_count INT NOT NULL DEFAULT 0,
       reply_to_comment_id INT,
+      reply_to_floor INT,
+      reply_to_user_name VARCHAR(255),
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       CONSTRAINT fk_pc_problem_id FOREIGN KEY (problem_id)
         REFERENCES problems(id) ON DELETE CASCADE,
       CONSTRAINT fk_pc_user_id FOREIGN KEY (user_id)
         REFERENCES users(id) ON DELETE CASCADE,
-      CONSTRAINT fk_pc_reply_to FOREIGN KEY (reply_to_comment_id)
-        REFERENCES problem_comments(id) ON DELETE SET NULL,
       INDEX idx_problem_comments_problem_floor (problem_id, floor),
       INDEX idx_problem_comments_problem_id (problem_id, id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
