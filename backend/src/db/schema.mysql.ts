@@ -77,6 +77,9 @@ export const problems = mysqlTable("problems", {
   choices: json("choices").$type<string[] | null>(),
   answer: json("answer").$type<number | number[] | string>().notNull(),
   hint: text("hint"),
+  // Monotonic per-problem floor counter; only increments, so deleting a
+  // comment never reuses its floor. 0 = no comment posted yet.
+  commentFloorSeq: int("comment_floor_seq").notNull().default(0),
 });
 
 export const problemSetProblems = mysqlTable(

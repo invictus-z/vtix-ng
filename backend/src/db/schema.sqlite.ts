@@ -64,6 +64,9 @@ export const problems = sqliteTable("problems", {
     .$type<number | number[] | string>()
     .notNull(),
   hint: text("hint"),
+  // Monotonic per-problem floor counter; only increments, so deleting a
+  // comment never reuses its floor. 0 = no comment posted yet.
+  commentFloorSeq: integer("comment_floor_seq").notNull().default(0),
 });
 
 export const problemSetProblems = sqliteTable(

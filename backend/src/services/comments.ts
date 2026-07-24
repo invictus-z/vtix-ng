@@ -326,11 +326,36 @@ export async function createComment(options: {
   const now = Date.now();
 
   const created = await db.transaction(async (tx: typeof db) => {
-    const [countRow] = await tx
-      .select({ count: sql<number>`count(*)` })
-      .from(problemComments)
-      .where(eq(problemComments.problemId, problemId));
-    const floor = Number(countRow?.count ?? 0) + 1;
+    // Reserve the next floor from a per-problem monotonic counter
+    // (problems.commentFloorSeq). It only ever increments, so deleting a
+    // comment never reuses its floor (no collisions, no "delete 6 -> repost 6").
+    // SQLite returns the new value via RETURNING; MySQL relies on the row write
+    // lock to serialize concurrent posts, then reads the value back.
+    let floor = 0;
+    if (dbDialect === "mysql") {
+      await tx
+        .update(problems)
+        .set({ commentFloorSeq: sql`${problems.commentFloorSeq} + 1` })
+        .where(eq(problems.id, problemId));
+      const [seqRow] = await tx
+        .select({ seq: problems.commentFloorSeq })
+        .from(problems)
+        .where(eq(problems.id, problemId))
+        .limit(1);
+      floor = Number(seqRow?.seq ?? 0);
+    } else {
+      const seqRows = (await tx
+        .update(problems)
+        .set({ commentFloorSeq: sql`${problems.commentFloorSeq} + 1` })
+        .where(eq(problems.id, problemId))
+        .returning({ seq: problems.commentFloorSeq })) as Array<
+        { seq: number } | undefined
+      >;
+      floor = Number(seqRows[0]?.seq ?? 0);
+    }
+    if (floor <= 0) {
+      throw new Error("Failed to assign comment floor.");
+    }
 
     const row = {
       problemId,
